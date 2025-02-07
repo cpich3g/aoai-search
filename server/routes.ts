@@ -1,27 +1,18 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
-import {
-  GoogleGenerativeAI,
-  type ChatSession,
-  type GenerateContentResult,
-} from "@google/generative-ai";
+import { OpenAIClient, AzureKeyCredential } from "@azure/openai";
 import { marked } from "marked";
 import { setupEnvironment } from "./env";
 
 const env = setupEnvironment();
-const genAI = new GoogleGenerativeAI(env.GOOGLE_API_KEY);
-const model = genAI.getGenerativeModel({
-  model: "gemini-2.0-flash-exp",
-  generationConfig: {
-    temperature: 0.9,
-    topP: 1,
-    topK: 1,
-    maxOutputTokens: 2048,
-  },
-});
+const client = new OpenAIClient(
+  "https://<your-resource-name>.openai.azure.com/",
+  new AzureKeyCredential(env.AZURE_API_KEY)
+);
+const deploymentId = "<your-deployment-id>";
 
 // Store chat sessions in memory
-const chatSessions = new Map<string, ChatSession>();
+const chatSessions = new Map<string, any>();
 
 // Format raw text into proper markdown
 async function formatResponseToMarkdown(
@@ -114,34 +105,32 @@ export function registerRoutes(app: Express): Server {
       }
 
       // Create a new chat session with search capability
-      const chat = model.startChat({
-        tools: [
-          {
-            // @ts-ignore - google_search is a valid tool but not typed in the SDK yet
-            google_search: {},
-          },
-        ],
-      });
+      const chat = {
+        messages: [],
+      };
 
       // Generate content with search tool
-      const result = await chat.sendMessage(query);
-      const response = await result.response;
+      const result = await client.getCompletions(deploymentId, {
+        prompt: query,
+        maxTokens: 2048,
+        temperature: 0.9,
+        topP: 1,
+        topK: 1,
+      });
+      const response = result.choices[0].text;
       console.log(
-        "Raw Google API Response:",
+        "Raw Azure OpenAI API Response:",
         JSON.stringify(
           {
-            text: response.text(),
-            candidates: response.candidates,
-            groundingMetadata: response.candidates?.[0]?.groundingMetadata,
+            text: response,
           },
           null,
           2
         )
       );
-      const text = response.text();
 
       // Format the response text to proper markdown/HTML
-      const formattedText = await formatResponseToMarkdown(text);
+      const formattedText = await formatResponseToMarkdown(response);
 
       // Extract sources from grounding metadata
       const sourceMap = new Map<
@@ -150,7 +139,7 @@ export function registerRoutes(app: Express): Server {
       >();
 
       // Get grounding metadata from response
-      const metadata = response.candidates?.[0]?.groundingMetadata as any;
+      const metadata = result.choices[0].metadata as any;
       if (metadata) {
         const chunks = metadata.groundingChunks || [];
         const supports = metadata.groundingSupports || [];
@@ -216,24 +205,27 @@ export function registerRoutes(app: Express): Server {
       }
 
       // Send follow-up message in existing chat
-      const result = await chat.sendMessage(query);
-      const response = await result.response;
+      const result = await client.getCompletions(deploymentId, {
+        prompt: query,
+        maxTokens: 2048,
+        temperature: 0.9,
+        topP: 1,
+        topK: 1,
+      });
+      const response = result.choices[0].text;
       console.log(
-        "Raw Google API Follow-up Response:",
+        "Raw Azure OpenAI Follow-up Response:",
         JSON.stringify(
           {
-            text: response.text(),
-            candidates: response.candidates,
-            groundingMetadata: response.candidates?.[0]?.groundingMetadata,
+            text: response,
           },
           null,
           2
         )
       );
-      const text = response.text();
 
       // Format the response text to proper markdown/HTML
-      const formattedText = await formatResponseToMarkdown(text);
+      const formattedText = await formatResponseToMarkdown(response);
 
       // Extract sources from grounding metadata
       const sourceMap = new Map<
@@ -242,7 +234,7 @@ export function registerRoutes(app: Express): Server {
       >();
 
       // Get grounding metadata from response
-      const metadata = response.candidates?.[0]?.groundingMetadata as any;
+      const metadata = result.choices[0].metadata as any;
       if (metadata) {
         const chunks = metadata.groundingChunks || [];
         const supports = metadata.groundingSupports || [];
